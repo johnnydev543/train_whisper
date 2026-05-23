@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+
+# Training data & output
+cv_zhTW_concat/
+cv_zhTW_concat_mini/
+whisper-base-zh-TW-lora/
+whisper-base-zh-TW-lora-test/
+
+# Training logs
+training.log
+
+# Distribution archives
+whisper_train_package.tar.gz
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

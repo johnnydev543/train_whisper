@@ -1,0 +1,27 @@
+# Whisper Base 中文(台灣) LoRA 微調 - 依賴套件
+# Python 3.12
+
+# 核心套件
+torch>=2.1.0
+torchaudio>=2.1.0
+transformers>=4.39.0
+datasets>=2.18.0
+accelerate>=0.27.0
+peft>=0.10.0
+
+# 評估套件
+evaluate>=0.4.0
+jiwer>=3.0.0
+
+# 音頻處理
+soundfile>=0.12.0
+librosa>=0.10.0
+
+# 訓練工具
+tensorboard>=2.15.0
+
+# GPU 相關（依據 CUDA 版本安裝，見下方說明）
+# 請根據你的 CUDA 版本安裝對應的 torch：
+# CUDA 11.8: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+# CUDA 12.1: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# CUDA 12.4: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
