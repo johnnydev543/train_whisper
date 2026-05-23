@@ -120,8 +120,6 @@ if [ "${HAS_CUDA}" -eq 1 ]; then
         --data_dir "${DATA_DIR}" \
         --output_dir "${OUTPUT_DIR}" \
         --use_gpu \
-        --batch_size 2 \
-        --gradient_accumulation_steps 8 \
         --epochs 5 \
         --learning_rate 1e-4 \
         --warmup_steps 50 \
@@ -138,8 +136,6 @@ else
     python3 "${WORK_DIR}/train.py" \
         --data_dir "${DATA_DIR}" \
         --output_dir "${OUTPUT_DIR}" \
-        --batch_size 1 \
-        --gradient_accumulation_steps 16 \
         --epochs 3 \
         --learning_rate 5e-5 \
         --warmup_steps 20 \

@@ -1,89 +1,31 @@
-# Whisper Base 中文(台灣) LoRA 微調 - 部署指南
+# Whisper Base 中文(台灣) LoRA 微調
 
-## 檔案結構
-
-```
-train_whisper_cpu/
-├── train.py                  # 訓練腳本
-├── concat_audio.py           # 音檔拼接腳本（已在本地執行過）
-├── requirements.txt          # Python 依賴
-├── setup_and_train.sh        # 遠端一鍵設定+訓練腳本
-├── README.md                 # 本檔案
-└── cv_zhTW_concat/           # 拼接後的資料集
-    ├── train/
-    │   ├── data.tsv
-    │   └── clips/            # 981 個 WAV 檔案
-    ├── dev/
-    │   ├── data.tsv
-    │   └── clips/            # 706 個 WAV 檔案
-    └── test/
-        ├── data.tsv
-        └── clips/            # 771 個 WAV 檔案
-```
-
-## 遠端部署步驟
-
-### 1. 打包資料
-
-```powershell
-# 在本機 Windows PowerShell 執行
-cd d:\Codes\train_whisper_cpu
-
-# 打包訓練腳本和資料集
-# 注意：cv_zhTW_concat 約 2 GB
-tar -czf whisper_train_package.tar.gz `
-    train.py `
-    requirements.txt `
-    setup_and_train.sh `
-    cv_zhTW_concat/
-```
-
-### 2. 上傳到遠端
-
-```powershell
-# 使用 scp 上傳（替換為你的遠端位址）
-scp whisper_train_package.tar.gz user@remote-server:/path/to/train_whisper_cpu/
-
-# 或使用 rsync（更快，支援斷點續傳）
-rsync -avz --progress whisper_train_package.tar.gz user@remote-server:/path/to/train_whisper_cpu/
-```
-
-### 3. 在遠端解壓並訓練
+## 快速開始
 
 ```bash
-# SSH 到遠端
-ssh user@remote-server
+# 一鍵設定環境 + 訓練
+chmod +x setup_and_train.sh && ./setup_and_train.sh
 
-# 解壓
-cd /path/to/train_whisper_cpu
-tar -xzf whisper_train_package.tar.gz
-
-# 一鍵設定和訓練
-chmod +x setup_and_train.sh
-./setup_and_train.sh
-```
-
-### 4. 手動訓練（如果不想用一鍵腳本）
-
-```bash
-# 建立虛擬環境
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 安裝 PyTorch（根據 CUDA 版本）
-# CUDA 12.1:
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-# CUDA 11.8:
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# 安裝其他依賴
+# 或手動設定
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121  # 依 CUDA 版本調整
 pip install -r requirements.txt
 
-# GPU 訓練（GTX 1050 Ti 4GB）
-python train.py --use_gpu --batch_size 2 --gradient_accumulation_steps 8 --epochs 5
+# GPU 訓練（參數自動偵測）
+python train.py --use_gpu
 
 # CPU 訓練（非常慢）
-python train.py --batch_size 1 --gradient_accumulation_steps 16 --epochs 3
+python train.py
+```
+
+## 繼續訓練
+
+```bash
+# 從 LoRA adapter 繼續訓練（最常用）
+python train.py --use_gpu --resume_from_adapter ./whisper-base-zh-TW-lora --epochs 3
+
+# 從 Trainer checkpoint 繼續訓練
+python train.py --use_gpu --resume_from_checkpoint whisper-base-zh-TW-lora/checkpoint-300
 ```
 
 ## 訓練參數說明
