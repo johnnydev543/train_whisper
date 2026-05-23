@@ -3,23 +3,23 @@
 使用 cv_zhTW_concat 測試集驗證 Whisper 模型
 
 計算 WER (Word Error Rate) 和 CER (Character Error Rate)，
-支援 CPU 模式（最準確）和 chunked ONNX 模式。
+支援 CPU / ONNX / Hailo HEF 三種推論模式。
 
 用法:
   # 驗證整個 test split（CPU 模式）
   python evaluate_model.py --cpu
 
-  # 驗證前 N 筆
-  python evaluate_model.py --cpu --max_samples 10
-
   # Chunked ONNX encoder 模式
   python evaluate_model.py --onnx
 
+  # Hailo NPU encoder 模式（需 Hailo-8 硬體）
+  python evaluate_model.py --hef
+
+  # 驗證前 N 筆
+  python evaluate_model.py --cpu --max_samples 10
+
   # 使用自己的 LoRA adapter（不須先合併）
   python evaluate_model.py --cpu --adapter ./whisper-base-zh-TW-lora
-
-  # 指定 merged 模型目錄
-  python evaluate_model.py --cpu --model_dir ./whisper-base-zh-TW-merged
 """
 
 import os
@@ -96,9 +96,46 @@ def transcribe_cpu(audio, model, processor, language="chinese", task="transcribe
     return processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
 
 
-def transcribe_chunked(audio, model, processor, onnx_session,
-                        language="chinese", task="transcribe"):
-    """Chunked: 5s ONNX encoder + per-chunk HF decoder"""
+def run_encoder_onnx(mel_nhwc, onnx_session):
+    """ONNX encoder: NHWC → NCHW → run → (1,250,512)"""
+    mel_nchw = mel_nhwc.transpose(0, 3, 1, 2)
+    return onnx_session.run(None, {"mel_input": mel_nchw})[0]
+
+
+def run_encoder_hailo(mel_nhwc, hef_path):
+    """Hailo NPU encoder: 需 Hailo-8 硬體 + runtime"""
+    try:
+        from hailo_platform import (VDevice, HailoStream,
+                                     ConfigureParams, Hef, InferVStreams,
+                                     InputVStreamParams, OutputVStreamparams)
+    except ImportError:
+        logger.error("hailo_platform not installed. Install Hailo runtime SDK for NPU access.")
+        sys.exit(1)
+
+    hef = Hef(hef_path)
+    params = ConfigureParams.create_from_hef(hef, interface=HailoStream.INTERFACE.PCIe)
+
+    with VDevice() as vdevice:
+        configure_group = vdevice.configure(hef, params)
+        network_group = configure_group[0]
+        input_vstream_params = InputVStreamParams.make(network_group)
+        output_vstream_params = OutputVStreamparams.make(network_group)
+        input_data = {name: mel_nhwc for name in input_vstream_params}
+
+        with InferVStreams(network_group, input_vstream_params, output_vstream_params) as infer_pipeline:
+            output = infer_pipeline.infer(input_data)
+
+        output_key = list(output.keys())[0]
+        return output[output_key]
+
+
+def transcribe_chunked(audio, model, processor, encoder_fn,
+                       language="chinese", task="transcribe"):
+    """
+    Chunked: 5s encoder chunks + per-chunk HF decoder
+
+    encoder_fn: callable(mel_nhwc) → (1, 250, 512) numpy array
+    """
     import torch
     from transformers.modeling_outputs import BaseModelOutput
 
@@ -118,9 +155,8 @@ def transcribe_chunked(audio, model, processor, onnx_session,
             chunk, sampling_rate=16000, return_tensors="np"
         ).input_features[0][:, :MEL_FRAMES]
         mel_nhwc = mel.T[np.newaxis, np.newaxis, :, :].astype(np.float32)
-        mel_nchw = mel_nhwc.transpose(0, 3, 1, 2)
 
-        enc_out = onnx_session.run(None, {"mel_input": mel_nchw})[0]  # (1,250,512)
+        enc_out = encoder_fn(mel_nhwc)  # (1,250,512)
 
         padded = np.zeros((1, MAX_SOURCE, D_MODEL), dtype=np.float32)
         padded[:, :enc_out.shape[1], :] = enc_out
@@ -219,12 +255,16 @@ def main():
                         help="純 CPU 模式（完整 30s HF pipeline）")
     parser.add_argument("--onnx", action="store_true",
                         help="Chunked ONNX encoder 模式")
+    parser.add_argument("--hef", action="store_true",
+                        help="Hailo NPU encoder 模式（需 Hailo-8 硬體）")
     parser.add_argument("--adapter", default=None,
                         help="LoRA adapter 目錄（直接載入，不需先合併）")
     parser.add_argument("--model_dir", default="./hailo_export/whisper-merged-cpu",
                         help="Merged 模型目錄（--adapter 未指定時使用）")
     parser.add_argument("--onnx_path", default="./hailo_export/whisper_encoder.onnx",
                         help="Encoder ONNX 檔案")
+    parser.add_argument("--hef_path", default="./hailo_export/whisper_encoder.hef",
+                        help="Encoder HEF 檔案")
     parser.add_argument("--max_samples", type=int, default=None,
                         help="最多驗證幾筆（debug 用）")
     parser.add_argument("--language", default="chinese", help="語言")
@@ -236,7 +276,7 @@ def main():
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
 
-    if not args.cpu and not args.onnx:
+    if not args.cpu and not args.onnx and not args.hef:
         args.cpu = True  # default to CPU mode
 
     # Load test data
@@ -247,19 +287,30 @@ def main():
         model_dir=args.model_dir, adapter_dir=args.adapter,
     )
 
-    # Load ONNX session if needed
+    # Build encoder function
     onnx_session = None
-    if args.onnx:
+    mode_label = "CPU (30s)"
+
+    if args.hef:
+        if not os.path.exists(args.hef_path):
+            logger.error(f"HEF not found: {args.hef_path}")
+            sys.exit(1)
+        encoder_fn = lambda mel_nhwc: run_encoder_hailo(mel_nhwc, args.hef_path)
+        mode_label = "Hailo HEF (5s)"
+        logger.info(f"HEF encoder: {args.hef_path}")
+    elif args.onnx:
         import onnxruntime as ort
         onnx_session = ort.InferenceSession(args.onnx_path)
-        logger.info(f"ONNX encoder loaded: {args.onnx_path}")
+        encoder_fn = lambda mel_nhwc: run_encoder_onnx(mel_nhwc, onnx_session)
+        mode_label = "Chunked ONNX (5s)"
+        logger.info(f"ONNX encoder: {args.onnx_path}")
 
     # Evaluate
     references = []
     hypotheses = []
     total_duration = 0
 
-    logger.info(f"Mode: {'CPU (30s)' if args.cpu else 'Chunked ONNX (5s)'}")
+    logger.info(f"Mode: {mode_label}")
     logger.info(f"Evaluating {len(samples)} samples...")
 
     for i, sample in enumerate(samples):
@@ -271,7 +322,7 @@ def main():
         if args.cpu:
             hyp = transcribe_cpu(audio, model, processor, args.language, args.task)
         else:
-            hyp = transcribe_chunked(audio, model, processor, onnx_session,
+            hyp = transcribe_chunked(audio, model, processor, encoder_fn,
                                       args.language, args.task)
         dt = time.time() - t0
 
@@ -290,7 +341,7 @@ def main():
     wer, cer = compute_wer_cer(references, hypotheses)
 
     print("\n" + "=" * 60)
-    print(f"  Evaluation Results ({'CPU 30s' if args.cpu else 'Chunked ONNX 5s'})")
+    print(f"  Evaluation Results ({mode_label})")
     print(f"  Samples: {len(samples)}")
     print(f"  Total audio: {total_duration:.1f}s")
     print("-" * 60)
