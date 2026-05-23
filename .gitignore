@@ -21,6 +21,21 @@ training.log
 # Distribution archives
 whisper_train_package.tar.gz
 
+# Hailo export artifacts
+hailo_export/
+*.hef
+*.har
+*.whl
+
+# Hailo SDK logs
+acceleras.log
+allocator.log
+hailo_sdk.client.log
+hailo_sdk.core.log
+
+# Install logs
+.install_logs/
+
 # IDE / OS
 .vscode/
 .idea/
